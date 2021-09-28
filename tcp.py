@@ -31,27 +31,25 @@ class Servidor:
 
         payload = segment[4*(flags>>12):]
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
-
+        (dst_addr_res, dst_port_res, src_addr_res, src_port_res) = (src_addr, src_port, dst_addr, dst_port)
         if (flags & FLAGS_SYN) == FLAGS_SYN:
             conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao)
-            
-            conexao.seq = randint(0, 0xffff)
-            conexao.ack = seq_no + 1
-
+            conexao.seq_no = seq_no
+            conexao.ack_no = seq_no + 1
             self.rede.enviar(
                 fix_checksum(
-                    make_header(dst_port, src_port, conexao.seq, conexao.ack, FLAGS_SYN | FLAGS_ACK),
-                    dst_addr,
-                    src_addr
-                ), src_addr
+                    make_header(src_port_res, dst_port_res, seq_no, seq_no+1, FLAGS_SYN | FLAGS_ACK),
+                    src_addr_res,
+                    dst_addr_res
+                ), dst_addr_res
             )
-            conexao.seq += 1
             
             if self.callback:
                 self.callback(conexao)
         elif id_conexao in self.conexoes:
             # Passa para a conexão adequada se ela já estiver estabelecida
             self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
+            
         else:
             print('%s:%d -> %s:%d (pacote associado a conexão desconhecida)' %
                   (src_addr, src_port, dst_addr, dst_port))
@@ -71,9 +69,21 @@ class Conexao:
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         # TODO: trate aqui o recebimento de segmentos provenientes da camada de rede.
+        print('recebido payload: %r' % payload)
+        if (seq_no != self.ack_no):
+            return
+        self.ack_no += len(payload)
+        (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
+        self.servidor.rede.enviar(
+            fix_checksum(
+                make_header(dst_port, src_port, 1, self.ack_no, FLAGS_ACK),
+                dst_addr,
+                src_addr
+            ), src_addr
+        )
+        self.callback(self, payload)
         # Chame self.callback(self, dados) para passar dados para a camada de aplicação após
         # garantir que eles não sejam duplicados e que tenham sido recebidos em ordem.
-        print('recebido payload: %r' % payload)
 
     # Os métodos abaixo fazem parte da API
 
