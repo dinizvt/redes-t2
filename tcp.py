@@ -33,8 +33,8 @@ class Servidor:
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
         (dst_addr_res, dst_port_res, src_addr_res, src_port_res) = (src_addr, src_port, dst_addr, dst_port)
         if (flags & FLAGS_SYN) == FLAGS_SYN:
-            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao)
-            conexao.seq_no = seq_no
+            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, seq_no+1)
+            conexao.seq_no = seq_no + 1
             conexao.ack_no = seq_no + 1
             self.rede.enviar(
                 fix_checksum(
@@ -56,7 +56,8 @@ class Servidor:
 
 
 class Conexao:
-    def __init__(self, servidor, id_conexao):
+    def __init__(self, servidor, id_conexao, seq_init):
+        self.seq_init = seq_init
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
@@ -72,11 +73,13 @@ class Conexao:
         print('recebido payload: %r' % payload)
         if (seq_no != self.ack_no):
             return
+        if len(payload) == 0:
+            return
         self.ack_no += len(payload)
         (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
         self.servidor.rede.enviar(
             fix_checksum(
-                make_header(dst_port, src_port, 1, self.ack_no, FLAGS_ACK),
+                make_header(dst_port, src_port, self.seq_no, self.ack_no, FLAGS_ACK),
                 dst_addr,
                 src_addr
             ), src_addr
@@ -98,10 +101,19 @@ class Conexao:
         """
         Usado pela camada de aplicação para enviar dados
         """
-        # TODO: implemente aqui o envio de dados.
-        # Chame self.servidor.rede.enviar(segmento, dest_addr) para enviar o segmento
-        # que você construir para a camada de rede.
-        pass
+        if len(dados) <= MSS:
+            (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
+            self.servidor.rede.enviar(
+                fix_checksum(
+                    make_header(src_port, dst_port, self.seq_no, self.ack_no, FLAGS_ACK) + dados,
+                    src_addr,
+                    dst_addr
+                ), dst_addr
+            )
+            self.seq_no += len(dados)
+        else:
+            self.enviar(dados[:MSS])
+            self.enviar(dados[MSS:])
 
     def fechar(self):
         """
