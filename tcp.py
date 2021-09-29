@@ -61,6 +61,7 @@ class Conexao:
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
+        self.closed = False
         self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
         #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
 
@@ -69,13 +70,17 @@ class Conexao:
         print('Este é um exemplo de como fazer um timer')
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
+        if self.closed:
+            return
         # TODO: trate aqui o recebimento de segmentos provenientes da camada de rede.
         print('recebido payload: %r' % payload)
         if (seq_no != self.ack_no):
             return
-        if len(payload) == 0:
+        if (flags & FLAGS_FIN == FLAGS_FIN):
+            self.callback(self, b'')
+        elif len(payload) == 0:
             return
-        self.ack_no += len(payload)
+        self.ack_no += max(len(payload), 1)
         (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
         self.servidor.rede.enviar(
             fix_checksum(
@@ -119,5 +124,12 @@ class Conexao:
         """
         Usado pela camada de aplicação para fechar a conexão
         """
-        # TODO: implemente aqui o fechamento de conexão
-        pass
+        (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
+        self.servidor.rede.enviar(
+            fix_checksum(
+                make_header(src_port, dst_port, self.seq_no, self.ack_no, FLAGS_ACK | FLAGS_FIN),
+                src_addr,
+                dst_addr
+            ), dst_addr
+        )
+        self.closed = True
