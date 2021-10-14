@@ -62,18 +62,27 @@ class Conexao:
         self.id_conexao = id_conexao
         self.callback = None
         self.closed = False
-        self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
+        self.not_ack = []
+        self.timer = None  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
         #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
 
-    def _exemplo_timer(self):
-        # Esta função é só um exemplo e pode ser removida
-        print('Este é um exemplo de como fazer um timer')
+    def _timer_callback(self):
+        (_, _, dst_addr, _) = self.id_conexao
+        self.servidor.rede.enviar(self.not_ack[0], dst_addr)
+        self.timer = asyncio.get_event_loop().call_later(1, self._timer_callback)
+
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         if self.closed:
             return
-        # TODO: trate aqui o recebimento de segmentos provenientes da camada de rede.
         print('recebido payload: %r' % payload)
+        if (seq_no > self.ack_no - 1 and ((flags & FLAGS_ACK) == FLAGS_ACK)):
+            if len(self.not_ack) > 0:
+                self.not_ack.pop(0)
+                if self.timer:
+                    self.timer.cancel()
+                if self.not_ack:
+                    self.timer = asyncio.get_event_loop().call_later(1, self._timer_callback)
         if (seq_no != self.ack_no):
             return
         if (flags & FLAGS_FIN == FLAGS_FIN):
@@ -108,14 +117,15 @@ class Conexao:
         """
         if len(dados) <= MSS:
             (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
-            self.servidor.rede.enviar(
-                fix_checksum(
-                    make_header(src_port, dst_port, self.seq_no, self.ack_no, FLAGS_ACK) + dados,
-                    src_addr,
-                    dst_addr
-                ), dst_addr
+            msg = fix_checksum(
+                make_header(src_port, dst_port, self.seq_no, self.ack_no, FLAGS_ACK) + dados,
+                src_addr,
+                dst_addr
             )
+            self.servidor.rede.enviar(msg, dst_addr)
             self.seq_no += len(dados)
+            self.not_ack.append(msg)
+            self.timer = asyncio.get_event_loop().call_later(1, self._timer_callback)
         else:
             self.enviar(dados[:MSS])
             self.enviar(dados[MSS:])
