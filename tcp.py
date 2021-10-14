@@ -1,8 +1,10 @@
 import asyncio
+from os import name
 from grader.tcputils import *
 from random import randint
-
-
+import time
+from collections import namedtuple
+Segment = namedtuple('Segment', ['msg','time','rtr'])
 class Servidor:
     def __init__(self, rede, porta):
         self.rede = rede
@@ -63,29 +65,43 @@ class Conexao:
         self.callback = None
         self.closed = False
         self.not_ack = []
-        self.timer = None  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
-        #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
+        self.timer = None 
+        self.dev_rtt = None
+        self.estimated_rtt = None
+        self.timeout_interval = 1
 
     def _timer_callback(self):
         (_, _, dst_addr, _) = self.id_conexao
-        self.servidor.rede.enviar(self.not_ack[0], dst_addr)
-        self.timer = asyncio.get_event_loop().call_later(1, self._timer_callback)
+        self.servidor.rede.enviar(self.not_ack[0].msg, dst_addr)
+        self.not_ack[0] = self.not_ack[0]._replace(rtr=True)
+        self.timer = asyncio.get_event_loop().call_later(self.timeout_interval, self._timer_callback)
 
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         if self.closed:
             return
         print('recebido payload: %r' % payload)
-        if (seq_no > self.ack_no - 1 and ((flags & FLAGS_ACK) == FLAGS_ACK)):
-            if len(self.not_ack) > 0:
+        if seq_no > self.ack_no - 1 and ((flags & FLAGS_ACK) == FLAGS_ACK):
+            if self.not_ack and not self.not_ack[0].rtr:
+                rtt = time.time() - self.not_ack[0].time
+                if not self.dev_rtt or not self.estimated_rtt:
+                    self.estimated_rtt = rtt
+                    self.dev_rtt = rtt/2
+                else:
+                    self.estimated_rtt = (1-0.125)*self.estimated_rtt + 0.125*rtt
+                    self.dev_rtt = (1 - 0.25)*self.dev_rtt + 0.25*abs(rtt-self.estimated_rtt)
+                self.timeout_interval = self.estimated_rtt + 4*self.dev_rtt
+            if self.not_ack:
                 self.not_ack.pop(0)
                 if self.timer:
                     self.timer.cancel()
                 if self.not_ack:
-                    self.timer = asyncio.get_event_loop().call_later(1, self._timer_callback)
-        if (seq_no != self.ack_no):
+                    self.timer = asyncio.get_event_loop().call_later(self.timeout_interval, self._timer_callback)
+                else:
+                    self.timer.cancel()
+        if seq_no != self.ack_no:
             return
-        if (flags & FLAGS_FIN == FLAGS_FIN):
+        if flags & FLAGS_FIN == FLAGS_FIN:
             self.callback(self, b'')
         elif len(payload) == 0:
             return
@@ -124,8 +140,8 @@ class Conexao:
             )
             self.servidor.rede.enviar(msg, dst_addr)
             self.seq_no += len(dados)
-            self.not_ack.append(msg)
-            self.timer = asyncio.get_event_loop().call_later(1, self._timer_callback)
+            self.not_ack.append(Segment(msg,time.time(),False))
+            self.timer = asyncio.get_event_loop().call_later(self.timeout_interval, self._timer_callback)
         else:
             self.enviar(dados[:MSS])
             self.enviar(dados[MSS:])
